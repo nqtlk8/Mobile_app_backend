@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, Query, Path, HTTPException, status
 from sqlmodel import Session, select
+from sqlalchemy.orm import selectinload
 from typing import List, Any
 
 from app.database import get_session
 from app.models import Blog, User, Category
-from app.schemas import BlogListResponse, UserDetailResponse, BlogResponse, UserResponse, CategoryResponse
+from app.schemas import BlogListResponse, UserDetailResponse, BlogResponse, UserResponse
 from app.security import get_current_user
 
 router = APIRouter(tags=["Blogs", "Users"])
@@ -24,35 +25,58 @@ async def get_blogs(
 ) -> dict[str, Any]:
     """
     Trả về danh sách các bài blog, hỗ trợ phân trang (limit và page).
+    Mỗi blog bao gồm thông tin tác giả (creator) và danh mục (category).
     """
     offset = (page - 1) * limit
     
-    # 1. Truy vấn Blogs từ DB với LIMIT và OFFSET
-    blogs_model = db.exec(
-        select(Blog).offset(offset).limit(limit)
-    ).all()
+    # 1. Truy vấn Blogs từ DB với LIMIT và OFFSET, eager load relationships
+    statement = (
+        select(Blog)
+        .options(selectinload(Blog.creator), selectinload(Blog.category))
+        .offset(offset)
+        .limit(limit)
+        .order_by(Blog.created_at.desc())  # Sắp xếp theo thời gian tạo mới nhất
+    )
+    blogs_model = db.exec(statement).all()
 
     # 2. Chuyển đổi List[Blog] Model sang List[BlogResponse] Schema
     blogs_response: List[BlogResponse] = []
     for blog in blogs_model:
-        # Giả lập tạo các response lồng nhau
-        creator_response = UserResponse(
-            id=blog.creator.id, full_name=blog.creator.full_name, email=blog.creator.email, following=0, follower=0
-        )
-        category_response = CategoryResponse(id=blog.category.id, name=blog.category.name)
+        # Đảm bảo relationships đã được load
+        if not blog.creator:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Không tìm thấy thông tin tác giả cho blog {blog.id}"
+            )
+        if not blog.category:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Không tìm thấy thông tin danh mục cho blog {blog.id}"
+            )
         
+        # Tạo UserResponse với thông tin creator
+        creator_response = UserResponse(
+            id=str(blog.creator.id),
+            full_name=blog.creator.full_name,
+            email=blog.creator.email,
+            following=15,  # Cần tính toán hoặc giả lập
+            follower=80    # Cần tính toán hoặc giả lập
+        )
+        
+        # Category chỉ trả về enum value (string) để tương thích với Kotlin enum
+        # category_id được giữ lại trong database nhưng không trả về trong response
         blogs_response.append(BlogResponse(
-            id=blog.id,
+            id=str(blog.id),
             title=blog.title,
             content=blog.content,
             image_url=blog.image_url,
-            category=category_response,
-            created_at=blog.created_at,
-            updated_at=blog.updated_at,
+            category=blog.category.name,  # Trả về trực tiếp enum value (string) như "business", "technology", etc.
+            created_at=blog.created_at,  # Pydantic tự động format ISO 8601
+            updated_at=blog.updated_at,  # Pydantic tự động format ISO 8601
             creator=creator_response,
         ))
 
-    # 3. Trả về phản hồi đã đóng gói
+    # 3. Trả về phản hồi đã đóng gói theo định dạng BaseResponse<List<BlogResponse>>
     return {
         "success": True,
         "message": f"Lấy thành công {len(blogs_response)} bài blog.",
@@ -72,7 +96,8 @@ async def get_user_by_id(
     current_user: User = Depends(get_current_user) # Yêu cầu xác thực
 ) -> dict[str, Any]:
     """
-    Trả về thông tin chi tiết (profile) của người dùng.
+    Trả về thông tin chi tiết (profile) của người dùng theo ID.
+    Bao gồm thông tin cơ bản và số lượng following/follower.
     """
     # 1. Truy vấn User từ DB theo ID
     user_model = db.get(User, id)
@@ -85,15 +110,15 @@ async def get_user_by_id(
 
     # 2. Chuyển đổi User Model sang UserResponse Schema
     user_response = UserResponse(
-        id=user_model.id,
+        id=str(user_model.id),
         full_name=user_model.full_name,
         email=user_model.email,
         avatar_url=user_model.avatar_url,
-        following=15, # Giả lập
-        follower=80, # Giả lập
+        following=15,  # Cần tính toán hoặc giả lập
+        follower=80,    # Cần tính toán hoặc giả lập
     )
     
-    # 3. Trả về phản hồi đã đóng gói
+    # 3. Trả về phản hồi đã đóng gói theo định dạng BaseResponse<UserResponse>
     return {
         "success": True,
         "message": "Lấy thông tin người dùng thành công.",

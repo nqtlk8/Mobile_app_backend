@@ -74,7 +74,7 @@ class BlogResponse(BaseModel):
     title: str
     content: str
     image_url: str
-    category: CategoryResponse
+    category: CategoryEnum  # Chỉ trả về enum value (string) thay vì object, để tương thích với Kotlin enum
     created_at: datetime
     updated_at: datetime
     creator: UserResponse
@@ -84,6 +84,10 @@ class BlogResponse(BaseModel):
             "image_url": "image_url",
             "created_at": "created_at",
             "updated_at": "updated_at",
+        }
+        # Đảm bảo datetime được serialize theo định dạng ISO 8601
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
         }
 
 class LoginUserResponse(BaseModel):
