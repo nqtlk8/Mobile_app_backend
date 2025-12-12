@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+psycopg2-binary 
+python-jose[cryptography] 
+email-validator
+pydantic-settings # Rất nên dùng để quản lý cấu hình (config.py)
+passlib[bcrypt] # Thư viện hash mật khẩu

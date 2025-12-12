@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  # Dịch vụ Cơ sở dữ liệu PostgreSQL
+  db:
+    image: postgres:14-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user_blog}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_DB: ${POSTGRES_DB:-blog_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Dịch vụ Backend Python (FastAPI)
+  web:
+    build: .
+    restart: always
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8080
+    ports:
+      - "8080:8080" # Ánh xạ cổng 8080 ra ngoài máy host
+    volumes:
+      - .:/app
+    depends_on:
+      - db # Đảm bảo DB khởi động trước Web
+    environment:
+      # Chuỗi kết nối DB cho FastAPI
+      DATABASE_URL: postgresql://${POSTGRES_USER:-user_blog}:${POSTGRES_PASSWORD:-secret}@db:5432/${POSTGRES_DB:-blog_db}
+      
+volumes:
+  postgres_data:
