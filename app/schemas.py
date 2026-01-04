@@ -1,7 +1,10 @@
 from pydantic import BaseModel, Field
-from typing import Generic, TypeVar, List, Optional
+from typing import Generic, TypeVar, List, Optional, TYPE_CHECKING
 from datetime import datetime
 from enum import Enum
+
+if TYPE_CHECKING:
+    from typing import ForwardRef
 
 # --- 1. ENUM (Kiểu liệt kê) ---
 
@@ -48,6 +51,42 @@ class RegisterUserBody(BaseModel):
             "full_name": "full_name",
         }
 
+class CreateBlogBody(BaseModel):
+    """ Schema cho request tạo blog mới """
+    title: str = Field(..., min_length=1, description="Tiêu đề bài blog")
+    content: str = Field(..., min_length=1, description="Nội dung bài blog")
+    image_url: str = Field(..., description="URL hình ảnh của blog")
+    category: CategoryEnum = Field(..., description="Danh mục của blog (business, technology, etc.)")
+
+    class Config:
+        fields = {
+            "image_url": "image_url",
+        }
+
+class UpsertBlogBody(BaseModel):
+    """ Schema cho request tạo/cập nhật blog mới - tương ứng với UpsertBlogBody trong Kotlin """
+    title: str = Field(..., min_length=1, description="Tiêu đề bài blog")
+    content: str = Field(..., min_length=1, description="Nội dung bài blog")
+    image_url: str = Field(..., description="URL hình ảnh của blog")
+    category: "CategoryResponse" = Field(..., description="Danh mục của blog (object với id và name)")
+
+    class Config:
+        fields = {
+            "image_url": "image_url",
+        }
+
+class UpdateBlogBody(BaseModel):
+    """ Schema cho request cập nhật blog """
+    title: Optional[str] = Field(None, min_length=1, description="Tiêu đề bài blog")
+    content: Optional[str] = Field(None, min_length=1, description="Nội dung bài blog")
+    image_url: Optional[str] = Field(None, description="URL hình ảnh của blog")
+    category: Optional[CategoryEnum] = Field(None, description="Danh mục của blog")
+
+    class Config:
+        fields = {
+            "image_url": "image_url",
+        }
+
 # --- 4. Schemas Đầu ra (Output Responses) ---
 
 class UserResponse(BaseModel):
@@ -74,7 +113,7 @@ class BlogResponse(BaseModel):
     title: str
     content: str
     image_url: str
-    category: CategoryEnum  # Chỉ trả về enum value (string) thay vì object, để tương thích với Kotlin enum
+    category: CategoryResponse  # Trả về CategoryResponse object với id và name
     created_at: datetime
     updated_at: datetime
     creator: UserResponse
@@ -99,4 +138,8 @@ class LoginUserResponse(BaseModel):
 LoginResponse = BaseResponse[LoginUserResponse]
 RegisterResponse = BaseResponse[dict] # BaseResponse<Any>
 BlogListResponse = BaseResponse[List[BlogResponse]]
+BlogDetailResponse = BaseResponse[BlogResponse]  # Response cho create/update blog
 UserDetailResponse = BaseResponse[UserResponse]
+
+# Rebuild models để xử lý forward references
+UpsertBlogBody.model_rebuild()

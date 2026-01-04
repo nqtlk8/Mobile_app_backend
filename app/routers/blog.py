@@ -2,10 +2,23 @@ from fastapi import APIRouter, Depends, Query, Path, HTTPException, status
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from typing import List, Any
+import uuid
+from datetime import datetime
 
 from app.database import get_session
 from app.models import Blog, User, Category
-from app.schemas import BlogListResponse, UserDetailResponse, BlogResponse, UserResponse
+from app.schemas import (
+    BlogListResponse, 
+    UserDetailResponse, 
+    BlogResponse, 
+    UserResponse,
+    CreateBlogBody,
+    UpsertBlogBody,
+    UpdateBlogBody,
+    BlogDetailResponse,
+    CategoryEnum,
+    CategoryResponse
+)
 from app.security import get_current_user
 
 router = APIRouter(tags=["Blogs", "Users"])
@@ -63,14 +76,18 @@ async def get_blogs(
             follower=80    # Cần tính toán hoặc giả lập
         )
         
-        # Category chỉ trả về enum value (string) để tương thích với Kotlin enum
-        # category_id được giữ lại trong database nhưng không trả về trong response
+        # Tạo CategoryResponse object với id và name
+        category_response = CategoryResponse(
+            id=str(blog.category.id),
+            name=blog.category.name
+        )
+        
         blogs_response.append(BlogResponse(
             id=str(blog.id),
             title=blog.title,
             content=blog.content,
             image_url=blog.image_url,
-            category=blog.category.name,  # Trả về trực tiếp enum value (string) như "business", "technology", etc.
+            category=category_response,  # Trả về CategoryResponse object
             created_at=blog.created_at,  # Pydantic tự động format ISO 8601
             updated_at=blog.updated_at,  # Pydantic tự động format ISO 8601
             creator=creator_response,
@@ -123,4 +140,192 @@ async def get_user_by_id(
         "success": True,
         "message": "Lấy thông tin người dùng thành công.",
         "result": user_response,
+    }
+
+
+@router.post(
+    "/api/blogs",
+    response_model=BlogDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Tạo blog mới"
+)
+async def create_blog(
+    body: UpsertBlogBody,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+) -> dict[str, Any]:
+    """
+    Tạo một blog mới. Người dùng đăng nhập sẽ là creator của blog.
+    Nhận category như một object CategoryResponse với id và name.
+    """
+    # 1. Tìm category theo id hoặc name từ body.category
+    # Ưu tiên tìm theo id nếu có và hợp lệ, nếu không thì tìm theo name
+    category = None
+    if body.category.id and body.category.id.strip():
+        category = db.get(Category, body.category.id)
+    
+    if not category and body.category.name:
+        category = db.exec(
+            select(Category).where(Category.name == body.category.name)
+        ).first()
+    
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Danh mục không tồn tại. ID: {body.category.id}, Name: {body.category.name}"
+        )
+    
+    # 2. Tạo blog mới
+    new_blog = Blog(
+        id=str(uuid.uuid4()),
+        title=body.title,
+        content=body.content,
+        image_url=body.image_url,
+        creator_id=str(current_user.id),
+        category_id=str(category.id),
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+    
+    # 3. Lưu vào database
+    db.add(new_blog)
+    db.commit()
+    db.refresh(new_blog)
+    
+    # 4. Load relationships để trả về đầy đủ thông tin
+    db.refresh(new_blog, ["creator", "category"])
+    
+    # 5. Tạo response
+    creator_response = UserResponse(
+        id=str(new_blog.creator.id),
+        full_name=new_blog.creator.full_name,
+        email=new_blog.creator.email,
+        following=15,  # Cần tính toán hoặc giả lập
+        follower=80    # Cần tính toán hoặc giả lập
+    )
+    
+    # Tạo CategoryResponse object
+    category_response = CategoryResponse(
+        id=str(new_blog.category.id),
+        name=new_blog.category.name
+    )
+    
+    blog_response = BlogResponse(
+        id=str(new_blog.id),
+        title=new_blog.title,
+        content=new_blog.content,
+        image_url=new_blog.image_url,
+        category=category_response,  # CategoryResponse object
+        created_at=new_blog.created_at,
+        updated_at=new_blog.updated_at,
+        creator=creator_response,
+    )
+    
+    return {
+        "success": True,
+        "message": "Tạo blog thành công.",
+        "result": blog_response,
+    }
+
+
+@router.put(
+    "/api/blogs/{id}",
+    response_model=BlogDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Cập nhật blog theo ID"
+)
+async def update_blog(
+    id: str = Path(..., description="ID của blog cần cập nhật"),
+    body: UpsertBlogBody = ...,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+) -> dict[str, Any]:
+    """
+    Cập nhật thông tin blog. Chỉ người tạo blog mới có quyền cập nhật.
+    Nhận category như một object CategoryResponse với id và name.
+    """
+    # 1. Tìm blog theo ID và load relationships
+    blog = db.exec(
+        select(Blog)
+        .options(selectinload(Blog.creator), selectinload(Blog.category))
+        .where(Blog.id == id)
+    ).first()
+    
+    if not blog:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Blog không tồn tại."
+        )
+    
+    # 2. Kiểm tra quyền: chỉ creator mới được cập nhật
+    if str(blog.creator_id) != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bạn không có quyền cập nhật blog này."
+        )
+    
+    # 3. Tìm category theo id hoặc name từ body.category
+    # Ưu tiên tìm theo id nếu có và hợp lệ, nếu không thì tìm theo name
+    category = None
+    if body.category.id and body.category.id.strip():
+        category = db.get(Category, body.category.id)
+    
+    if not category and body.category.name:
+        category = db.exec(
+            select(Category).where(Category.name == body.category.name)
+        ).first()
+    
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Danh mục không tồn tại. ID: {body.category.id}, Name: {body.category.name}"
+        )
+    
+    # 4. Cập nhật các trường từ body (tất cả đều required trong UpsertBlogBody)
+    blog.title = body.title
+    blog.content = body.content
+    blog.image_url = body.image_url
+    blog.category_id = str(category.id)
+    
+    # 5. Cập nhật updated_at
+    blog.updated_at = datetime.utcnow()
+    
+    # 6. Refresh để load category mới
+    db.refresh(blog, ["category"])
+    
+    # 7. Lưu vào database
+    db.add(blog)
+    db.commit()
+    db.refresh(blog, ["creator", "category"])
+    
+    # 8. Tạo response
+    creator_response = UserResponse(
+        id=str(blog.creator.id),
+        full_name=blog.creator.full_name,
+        email=blog.creator.email,
+        following=15,  # Cần tính toán hoặc giả lập
+        follower=80    # Cần tính toán hoặc giả lập
+    )
+    
+    # Tạo CategoryResponse object
+    category_response = CategoryResponse(
+        id=str(blog.category.id),
+        name=blog.category.name
+    )
+    
+    blog_response = BlogResponse(
+        id=str(blog.id),
+        title=blog.title,
+        content=blog.content,
+        image_url=blog.image_url,
+        category=category_response,  # CategoryResponse object
+        created_at=blog.created_at,
+        updated_at=blog.updated_at,
+        creator=creator_response,
+    )
+    
+    return {
+        "success": True,
+        "message": "Cập nhật blog thành công.",
+        "result": blog_response,
     }
