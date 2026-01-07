@@ -8,16 +8,16 @@ from datetime import datetime
 from app.database import get_session
 from app.models import Blog, User, Category
 from app.schemas import (
-    BlogListResponse, 
-    UserDetailResponse, 
-    BlogResponse, 
+    BlogListResponse,
+    UserDetailResponse,
+    BlogResponse,
     UserResponse,
     CreateBlogBody,
     UpsertBlogBody,
     UpdateBlogBody,
     BlogDetailResponse,
     CategoryEnum,
-    CategoryResponse
+    DeleteBlogResponse,
 )
 from app.security import get_current_user
 
@@ -76,18 +76,12 @@ async def get_blogs(
             follower=80    # Cần tính toán hoặc giả lập
         )
         
-        # Tạo CategoryResponse object với id và name
-        category_response = CategoryResponse(
-            id=str(blog.category.id),
-            name=blog.category.name
-        )
-        
         blogs_response.append(BlogResponse(
             id=str(blog.id),
             title=blog.title,
             content=blog.content,
             image_url=blog.image_url,
-            category=category_response,  # Trả về CategoryResponse object
+            category=blog.category.name,  # Trả về CategoryEnum (string) thay vì object
             created_at=blog.created_at,  # Pydantic tự động format ISO 8601
             updated_at=blog.updated_at,  # Pydantic tự động format ISO 8601
             creator=creator_response,
@@ -156,23 +150,17 @@ async def create_blog(
 ) -> dict[str, Any]:
     """
     Tạo một blog mới. Người dùng đăng nhập sẽ là creator của blog.
-    Nhận category như một object CategoryResponse với id và name.
+    Nhận category dạng enum (string) và trả về category dạng enum string.
     """
-    # 1. Tìm category theo id hoặc name từ body.category
-    # Ưu tiên tìm theo id nếu có và hợp lệ, nếu không thì tìm theo name
-    category = None
-    if body.category.id and body.category.id.strip():
-        category = db.get(Category, body.category.id)
-    
-    if not category and body.category.name:
-        category = db.exec(
-            select(Category).where(Category.name == body.category.name)
-        ).first()
+    # 1. Tìm category theo enum value từ body.category
+    category = db.exec(
+        select(Category).where(Category.name == body.category)
+    ).first()
     
     if not category:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Danh mục không tồn tại. ID: {body.category.id}, Name: {body.category.name}"
+            detail=f"Danh mục không tồn tại: {body.category}"
         )
     
     # 2. Tạo blog mới
@@ -204,18 +192,12 @@ async def create_blog(
         follower=80    # Cần tính toán hoặc giả lập
     )
     
-    # Tạo CategoryResponse object
-    category_response = CategoryResponse(
-        id=str(new_blog.category.id),
-        name=new_blog.category.name
-    )
-    
     blog_response = BlogResponse(
         id=str(new_blog.id),
         title=new_blog.title,
         content=new_blog.content,
         image_url=new_blog.image_url,
-        category=category_response,  # CategoryResponse object
+        category=new_blog.category.name,  # Trả về CategoryEnum (string) thay vì object
         created_at=new_blog.created_at,
         updated_at=new_blog.updated_at,
         creator=creator_response,
@@ -242,7 +224,7 @@ async def update_blog(
 ) -> dict[str, Any]:
     """
     Cập nhật thông tin blog. Chỉ người tạo blog mới có quyền cập nhật.
-    Nhận category như một object CategoryResponse với id và name.
+    Nhận category dạng enum (string) và trả về category dạng enum string.
     """
     # 1. Tìm blog theo ID và load relationships
     blog = db.exec(
@@ -264,21 +246,15 @@ async def update_blog(
             detail="Bạn không có quyền cập nhật blog này."
         )
     
-    # 3. Tìm category theo id hoặc name từ body.category
-    # Ưu tiên tìm theo id nếu có và hợp lệ, nếu không thì tìm theo name
-    category = None
-    if body.category.id and body.category.id.strip():
-        category = db.get(Category, body.category.id)
-    
-    if not category and body.category.name:
-        category = db.exec(
-            select(Category).where(Category.name == body.category.name)
-        ).first()
+    # 3. Tìm category theo enum value từ body.category
+    category = db.exec(
+        select(Category).where(Category.name == body.category)
+    ).first()
     
     if not category:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Danh mục không tồn tại. ID: {body.category.id}, Name: {body.category.name}"
+            detail=f"Danh mục không tồn tại: {body.category}"
         )
     
     # 4. Cập nhật các trường từ body (tất cả đều required trong UpsertBlogBody)
@@ -307,18 +283,12 @@ async def update_blog(
         follower=80    # Cần tính toán hoặc giả lập
     )
     
-    # Tạo CategoryResponse object
-    category_response = CategoryResponse(
-        id=str(blog.category.id),
-        name=blog.category.name
-    )
-    
     blog_response = BlogResponse(
         id=str(blog.id),
         title=blog.title,
         content=blog.content,
         image_url=blog.image_url,
-        category=category_response,  # CategoryResponse object
+        category=blog.category.name,  # Trả về CategoryEnum (string) thay vì object
         created_at=blog.created_at,
         updated_at=blog.updated_at,
         creator=creator_response,
@@ -328,4 +298,50 @@ async def update_blog(
         "success": True,
         "message": "Cập nhật blog thành công.",
         "result": blog_response,
+    }
+
+
+@router.delete(
+    "/api/blogs/{id}",
+    response_model=DeleteBlogResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Xóa blog theo ID",
+)
+async def delete_blog(
+    id: str = Path(..., description="ID của blog cần xóa"),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """
+    Xóa blog theo ID.
+    Chỉ người tạo blog mới có quyền xóa.
+
+    Tương thích với Retrofit:
+    `@DELETE("api/blogs/{id}") suspend fun deleteBlog(...): BaseResponse<Any>`
+    """
+    # 1. Tìm blog theo ID
+    blog = db.get(Blog, id)
+
+    if not blog:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Blog không tồn tại.",
+        )
+
+    # 2. Kiểm tra quyền: chỉ creator mới được xóa
+    if str(blog.creator_id) != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bạn không có quyền xóa blog này.",
+        )
+
+    # 3. Xóa blog
+    db.delete(blog)
+    db.commit()
+
+    # 4. Trả về BaseResponse<Any> (ở đây dùng dict rỗng làm result)
+    return {
+        "success": True,
+        "message": "Xóa blog thành công.",
+        "result": {},
     }

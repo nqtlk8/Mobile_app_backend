@@ -68,12 +68,13 @@ class UpsertBlogBody(BaseModel):
     title: str = Field(..., min_length=1, description="Tiêu đề bài blog")
     content: str = Field(..., min_length=1, description="Nội dung bài blog")
     image_url: str = Field(..., description="URL hình ảnh của blog")
-    category: "CategoryResponse" = Field(..., description="Danh mục của blog (object với id và name)")
+    category: CategoryEnum = Field(..., description="Danh mục của blog (enum: business, technology, etc.)")
 
     class Config:
         fields = {
             "image_url": "image_url",
         }
+        use_enum_values = True
 
 class UpdateBlogBody(BaseModel):
     """ Schema cho request cập nhật blog """
@@ -112,8 +113,8 @@ class BlogResponse(BaseModel):
     id: str
     title: str
     content: str
-    image_url: str
-    category: CategoryResponse  # Trả về CategoryResponse object với id và name
+    image_url: Optional[str] = ""
+    category: CategoryEnum  # Trả về CategoryEnum (string) trực tiếp, không có id
     created_at: datetime
     updated_at: datetime
     creator: UserResponse
@@ -128,18 +129,20 @@ class BlogResponse(BaseModel):
         json_encoders = {
             datetime: lambda v: v.isoformat()
         }
+        # Đảm bảo enum được serialize thành giá trị string trực tiếp
+        use_enum_values = True
 
 class LoginUserResponse(BaseModel):
     id: str
     token: str
 
 # --- 5. API Response Wrappers (Sử dụng cho response_model trong routers) ---
-
+ 
 LoginResponse = BaseResponse[LoginUserResponse]
 RegisterResponse = BaseResponse[dict] # BaseResponse<Any>
 BlogListResponse = BaseResponse[List[BlogResponse]]
 BlogDetailResponse = BaseResponse[BlogResponse]  # Response cho create/update blog
 UserDetailResponse = BaseResponse[UserResponse]
+DeleteBlogResponse = BaseResponse[dict]  # BaseResponse<Any> cho delete blog
 
-# Rebuild models để xử lý forward references
-UpsertBlogBody.model_rebuild()
+# Không cần rebuild vì không còn forward references
